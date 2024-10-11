@@ -1,13 +1,12 @@
 import os
-import streamlit as st
 import google.generativeai as genai
-from typing import List, Dict, Any
+from typing import List, Dict
 from docx import Document
 from dotenv import load_dotenv
+from IPython.display import Markdown, display
 import pypandoc
 import anthropic
 import openai
-import tempfile
 
 # Load environment variables
 load_dotenv()
@@ -113,20 +112,20 @@ def generate_monthly_status_report(model_name: str, master_content: str, example
         return error_message
 
 # File processing functions
-def read_file(file):
-    if file.name.endswith('.docx'):
-        doc = Document(file)
-        return '\n'.join([para.text for para in doc.paragraphs])
-    elif file.name.endswith('.txt'):
-        return file.getvalue().decode('utf-8')
-    else:
-        raise ValueError(f"Unsupported file type: {file.name}")
+def read_word_file(file_path: str) -> str:
+    doc = Document(file_path)
+    full_text = []
+    for para in doc.paragraphs:
+        full_text.append(para.text)
+    return '\n'.join(full_text)
 
-def process_input_files(files: List[Any]) -> Dict[str, str]:
+def process_input_docs(directory: str) -> Dict[str, str]:
     input_docs = {}
-    for file in files:
-        content = read_file(file)
-        input_docs[file.name] = content
+    for filename in os.listdir(directory):
+        if filename.endswith('.docx'):
+            file_path = os.path.join(directory, filename)
+            content = read_word_file(file_path)
+            input_docs[filename] = content
     return input_docs
 
 # Prompt management functions
@@ -148,51 +147,59 @@ def save_markdown_to_file(markdown_content: str, file_path: str):
 def convert_markdown_to_docx(markdown_file_path: str, output_file_path: str):
     pypandoc.convert_file(markdown_file_path, 'docx', outputfile=output_file_path)
 
-# Streamlit app
-def main():
-    st.title("Monthly Status Report Generator")
-
-    # File upload
-    uploaded_files = st.file_uploader("Upload input files (Word or Text)", type=['docx', 'txt'], accept_multiple_files=True)
-
-    if uploaded_files:
-        # Process input files
-        processed_docs = process_input_files(uploaded_files)
-
-        # Combine documents into a master file
-        master_content = "\n\n".join([f"File: {filename}\nContent: {content}" for filename, content in processed_docs.items()])
-
-        # Read the example file (you might want to upload this separately or include it in your app)
-        with open("./example/example.txt", 'r') as file:
-            example_content = file.read()
-
-        if st.button("Generate Report"):
-            with st.spinner("Generating report..."):
-                # Generate the monthly status report
-                report = generate_monthly_status_report("gpt4", master_content, example_content)
-
-                # Save the report as Word
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.md') as tmp_md:
-                    save_markdown_to_file(report, tmp_md.name)
-                
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp_docx:
-                    convert_markdown_to_docx(tmp_md.name, tmp_docx.name)
-                
-                # Provide download link for Word report
-                st.download_button(
-                    label="Download Word Report",
-                    data=open(tmp_docx.name, 'rb').read(),
-                    file_name="monthly_status_report.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
-
-                # Display the generated report
-                st.markdown(report)
-
-                # Clean up temporary files
-                os.unlink(tmp_md.name)
-                os.unlink(tmp_docx.name)
-
+# Main execution
 if __name__ == "__main__":
-    load_dotenv()
-    main()
+
+    # Process input documents
+    input_directory = "./data_files/inputs/TO1_FFD_FederalFacilitiesDivision"
+    processed_docs = process_input_docs(input_directory)
+
+    # Export into a text file in the data_files/master_file folder
+    os.makedirs("./data_files/master_file", exist_ok=True)
+    output_file = "./data_files/master_file/master_file.txt"
+
+    with open(output_file, 'w') as file:
+        for filename, content in processed_docs.items():
+            file.write(f"File: {filename}\n")
+            file.write(f"Content: {content}\n")
+            file.write("-" * 50 + "\n")
+            file.write("\n\n")
+
+    print(f"Combined documents exported to: {output_file}")
+
+    # Read the master file and example file
+    with open("./data_files/master_file/master_file.txt", 'r') as file:
+        master_content = file.read()
+
+    with open("./example/example.txt", 'r') as file:
+        example_content = file.read()
+
+    # Let user select the model
+    model_choice = input("Choose a model (gemini/claude/gpt4): ").lower()
+    while model_choice not in ["gemini", "claude", "gpt4"]:
+        print("Invalid choice. Please choose gemini, claude, or gpt4.")
+        model_choice = input("Choose a model (gemini/claude/gpt4): ").lower()
+
+    # Generate the monthly status report in Markdown
+    report = generate_monthly_status_report(model_choice, master_content, example_content)
+
+    # Create outputs folder if it doesn't exist
+    os.makedirs("./data_files/outputs", exist_ok=True)
+
+    # Get the input folder name
+    input_folder_name = os.path.basename(input_directory)
+
+    # Save the Markdown report
+    markdown_file = f"./data_files/outputs/{input_folder_name}_{model_choice}.md"
+    save_markdown_to_file(report, markdown_file)
+
+    # Convert the Markdown report to Word document
+    docx_file = f"./data_files/outputs/{input_folder_name}_{model_choice}.docx"
+    convert_markdown_to_docx(markdown_file, docx_file)
+
+    print(f"Monthly Status Report has been generated using {model_choice} and saved to '{docx_file}'")
+
+    # Display the generated report (if running in a Jupyter notebook)
+    with open(markdown_file, 'r') as md_file:
+        generated_report_content = md_file.read()
+    display(Markdown(generated_report_content))
